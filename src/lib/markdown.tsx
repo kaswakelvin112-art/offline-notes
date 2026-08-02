@@ -31,6 +31,10 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(text.slice(lastIndex, match.index));
     }
     const token = match[0];
+    // Capture the position past this match BEFORE recursing: the recursive
+    // renderInline call resets the shared regex's lastIndex, so reading it
+    // here afterwards would restart the outer loop at the same match forever.
+    const nextIndex = match.index + token.length;
     const key = `${keyPrefix}-${i++}`;
     if (token.startsWith('`')) {
       nodes.push(
@@ -66,7 +70,8 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
         </a>
       );
     }
-    lastIndex = INLINE_TOKEN.lastIndex;
+    lastIndex = nextIndex;
+    INLINE_TOKEN.lastIndex = nextIndex;
   }
 
   if (lastIndex < text.length) {
