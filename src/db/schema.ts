@@ -1,4 +1,6 @@
-import Dexie from 'dexie';
+import Dexie, { type Table } from 'dexie';
+import { Note, Folder } from './models';
+import type { QueuedChange } from './syncQueue';
 
 // One database, three tables:
 //   - folders            your folder list
@@ -15,12 +17,21 @@ import Dexie from 'dexie';
 // it's pushed to Supabase, or "the same note" becomes two different rows
 // in two different places.
 
-export const db = new Dexie('notesApp');
+class NotesAppDatabase extends Dexie {
+  notes!: Table<Note, string>;
+  folders!: Table<Folder, string>;
+  pendingChanges!: Table<QueuedChange, number>;
 
-db.version(1).stores({
-  folders: 'id, updated_at, deleted_at',
-  notes: 'id, folder_id, updated_at, deleted_at, *tags',
-  pendingChanges: '++id, entity, entity_id, created_at',
-});
+  constructor() {
+    super('notesApp');
+    this.version(1).stores({
+      folders: 'id, updated_at, deleted_at',
+      notes: 'id, folder_id, updated_at, deleted_at, *tags',
+      pendingChanges: '++id, entity, entity_id, created_at',
+    });
+  }
+}
+
+export const db = new NotesAppDatabase();
 
 export default db;

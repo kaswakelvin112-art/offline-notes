@@ -1,180 +1,396 @@
-import { useState } from 'react';
-import { useNotes, useFolders, useAllTags, usePendingChangeCount } from './hooks/useNotesData';
-import { createNote, updateNote, softDeleteNote } from './db/notes';
-import { createFolder, softDeleteFolder } from './db/folders';
+import { useRef, useState } from 'react';
+import { useNotes, useFolders, useAllTags, useTrashedNotes, usePendingChangeCount } from './hooks/useNotesData';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import {
+  createNote,
+  updateNote,
+  softDeleteNote,
+  restoreNote,
+  hardDeleteNote,
+  createFolder,
+  renameFolder,
+  softDeleteFolder,
+  restoreFolder,
+  type Note,
+  type Folder,
+} from './db';
+import type { ToastState, View } from './types';
 
+import AppShell from './components/AppShell';
+import Sidebar from './components/Sidebar';
+import NoteList from './components/NoteList';
+import NoteEditor, { type EditorMode } from './components/NoteEditor';
+import TrashView from './components/TrashView';
+import EmptyState from './components/EmptyState';
+import ConfirmDialog from './components/ConfirmDialog';
+import PromptDialog from './components/PromptDialog';
+import Toast from './components/Toast';
+import { FileTextIcon } from './components/icons';
+
+type DialogState =
+  | { kind: 'confirm-note'; note: Note }
+  | { kind: 'confirm-folder'; folder: Folder }
+  | { kind: 'confirm-permanent'; note: Note }
+  | { kind: 'prompt-folder' }
+  | { kind: 'prompt-rename'; folder: Folder }
+  | null;
+
+let toastCounter = 0;
 
 export default function App() {
-  const [activeFolder, setActiveFolder] = useState(undefined); // undefined = "All notes"
-  const [activeTag, setActiveTag] = useState(null);
+  const [view, setView] = useState<View>('notes');
+  const [activeFolderId, setActiveFolderId] = useState<string | null | undefined>(undefined);
+  const [activeTag, setActiveTag] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [selectedNoteId, setSelectedNoteId] = useState(null);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<EditorMode>('edit');
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const folders = useFolders();
   const tags = useAllTags();
   const notes = useNotes({
-    folder_id: activeFolder,
+    folder_id: activeFolderId ?? undefined,
     tag: activeTag ?? undefined,
     search: search || undefined,
   });
+  const trashed = useTrashedNotes();
   const pendingCount = usePendingChangeCount();
 
   const selectedNote = notes.find((n) => n.id === selectedNoteId) ?? null;
 
+  function pushToast(message: string, opts: { actionLabel?: string; onAction?: () => void } = {}) {
+    setToast({ id: ++toastCounter, message, ...opts });
+  }
+
+  function closeSidebar() {
+    setSidebarOpen(false);
+  }
+
+  // ---- create / edit -------------------------------------------------------
+
   async function handleNewNote() {
     const note = await createNote({
-      title: 'Untitled note',
+      title: '',
       body: '',
-      folder_id: activeFolder ?? null,
+      folder_id: activeFolderId ?? null,
       tags: activeTag ? [activeTag] : [],
     });
+    setView('notes');
     setSelectedNoteId(note.id);
+    closeSidebar();
   }
 
-  async function handleNewFolder() {
-    const name = window.prompt('Folder name');
-    if (name && name.trim()) await createFolder({ name: name.trim() });
+  async function handleDuplicate(note: Note) {
+    const copy = await createNote({
+      title: note.title ? `${note.title} copy` : '',
+      body: note.body,
+      folder_id: note.folder_id,
+      tags: note.tags,
+    });
+    setView('notes');
+    setSelectedNoteId(copy.id);
   }
+
+  async function handleTogglePin(note: Note) {
+    await updateNote(note.id, { pinned: !note.pinned });
+  }
+
+  async function handleAddTag(tag: string) {
+    if (!selectedNote) return;
+    await updateNote(selectedNote.id, { tags: [...selectedNote.tags, tag] });
+  }
+
+  async function handleRemoveTag(tag: string) {
+    if (!selectedNote) return;
+    await updateNote(selectedNote.id, { tags: selectedNote.tags.filter((t) => t !== tag) });
+  }
+
+  // ---- delete + restore ------------------------------------------------------
+
+  function requestDeleteNote(note: Note) {
+    setDialog({ kind: 'confirm-note', note });
+  }
+
+  async function confirmDeleteNote() {
+    if (!dialog || dialog.kind !== 'confirm-note') return;
+    const { note } = dialog;
+    await softDeleteNote(note.id);
+    if (selectedNoteId === note.id) setSelectedNoteId(null);
+    setDialog(null);
+    pushToast('Note moved to trash', {
+      actionLabel: 'Undo',
+      onAction: () => void restoreNote(note.id),
+    });
+  }
+
+  function requestDeleteForever(note: Note) {
+    setDialog({ kind: 'confirm-permanent', note });
+  }
+
+  async function confirmDeleteForever() {
+    if (!dialog || dialog.kind !== 'confirm-permanent') return;
+    await hardDeleteNote(dialog.note.id);
+    setDialog(null);
+    pushToast('Note permanently deleted');
+  }
+
+  function requestDeleteFolder(folder: Folder) {
+    setDialog({ kind: 'confirm-folder', folder });
+  }
+
+  async function confirmDeleteFolder() {
+    if (!dialog || dialog.kind !== 'confirm-folder') return;
+    const { folder } = dialog;
+    await softDeleteFolder(folder.id);
+    setDialog(null);
+    pushToast('Folder deleted', {
+      actionLabel: 'Undo',
+      onAction: () => void restoreFolder(folder.id),
+    });
+  }
+
+  async function handleRestoreNote(id: string) {
+    await restoreNote(id);
+  }
+
+  // ---- folders ---------------------------------------------------------------
+
+  function requestNewFolder() {
+    setDialog({ kind: 'prompt-folder' });
+  }
+
+  function requestRenameFolder(folder: Folder) {
+    setDialog({ kind: 'prompt-rename', folder });
+  }
+
+  async function submitFolderName(name: string) {
+    if (dialog?.kind === 'prompt-folder') {
+      await createFolder({ name });
+    } else if (dialog?.kind === 'prompt-rename') {
+      await renameFolder(dialog.folder.id, name);
+    }
+    setDialog(null);
+  }
+
+  // ---- navigation ---------------------------------------------------------------
+
+  function selectAllNotes() {
+    setView('notes');
+    setActiveFolderId(undefined);
+    setActiveTag(null);
+    closeSidebar();
+  }
+
+  function selectFolder(id: string | null) {
+    setView('notes');
+    setActiveFolderId(id);
+    closeSidebar();
+  }
+
+  function selectTrash() {
+    setView('trash');
+    setSelectedNoteId(null);
+    closeSidebar();
+  }
+
+  function toggleTag(tag: string) {
+    setActiveTag((prev) => (prev === tag ? null : tag));
+  }
+
+  function handleSelectNote(id: string) {
+    setSelectedNoteId(id);
+    closeSidebar();
+  }
+
+  function handleBackToNotes() {
+    setSelectedNoteId(null);
+  }
+
+  // ---- shortcuts -----------------------------------------------------------------
+
+  useKeyboardShortcuts({
+    onNewNote: () => void handleNewNote(),
+    onNewFolder: requestNewFolder,
+    onFocusSearch: () => {
+      if (view === 'notes') searchRef.current?.focus();
+    },
+    onTogglePreview: () => {
+      if (selectedNote) setEditorMode((m) => (m === 'edit' ? 'preview' : 'edit'));
+    },
+    onEscape: () => {
+      if (dialog) return;
+      if (sidebarOpen) setSidebarOpen(false);
+      else if (selectedNoteId) setSelectedNoteId(null);
+    },
+  });
+
+  // ---- render --------------------------------------------------------------------
+
+  const listTitle = search
+    ? 'Search results'
+    : activeTag
+      ? `#${activeTag}`
+      : activeFolderId !== undefined
+        ? (folders.find((f) => f.id === activeFolderId)?.name ?? 'Notes')
+        : 'All notes';
+
+  const sidebar = (
+    <Sidebar
+      folders={folders}
+      tags={tags}
+      activeFolderId={activeFolderId}
+      activeTag={activeTag}
+      view={view}
+      pendingCount={pendingCount}
+      trashedCount={trashed.length}
+      onSelectAllNotes={selectAllNotes}
+      onSelectFolder={selectFolder}
+      onToggleTag={toggleTag}
+      onSelectTrash={selectTrash}
+      onNewNote={() => void handleNewNote()}
+      onNewFolder={requestNewFolder}
+      onRenameFolder={requestRenameFolder}
+      onDeleteFolder={requestDeleteFolder}
+      onClose={closeSidebar}
+    />
+  );
+
+  const list =
+    view === 'trash' ? (
+      <TrashView
+        notes={trashed}
+        onRestore={(id) => void handleRestoreNote(id)}
+        onDeleteForever={requestDeleteForever}
+        onOpenSidebar={() => setSidebarOpen(true)}
+      />
+    ) : (
+      <NoteList
+        title={listTitle}
+        notes={notes}
+        search={search}
+        searchRef={searchRef}
+        selectedNoteId={selectedNoteId}
+        onSearchChange={setSearch}
+        onSelect={handleSelectNote}
+        onTogglePin={(id) => {
+          const note = notes.find((n) => n.id === id);
+          if (note) void handleTogglePin(note);
+        }}
+        onNewNote={() => void handleNewNote()}
+        onOpenSidebar={() => setSidebarOpen(true)}
+      />
+    );
+
+  const editor = selectedNote ? (
+    <NoteEditor
+      key={selectedNote.id}
+      note={selectedNote}
+      mode={editorMode}
+      onModeChange={setEditorMode}
+      onTogglePin={() => void handleTogglePin(selectedNote)}
+      onDuplicate={() => void handleDuplicate(selectedNote)}
+      onDelete={() => requestDeleteNote(selectedNote)}
+      onAddTag={(tag) => void handleAddTag(tag)}
+      onRemoveTag={(tag) => void handleRemoveTag(tag)}
+      onBack={handleBackToNotes}
+      onOpenSidebar={() => setSidebarOpen(true)}
+    />
+  ) : (
+    <EmptyState
+      icon={<FileTextIcon className="h-6 w-6" />}
+      title={view === 'trash' ? 'Viewing trash' : 'Select a note'}
+      message={
+        view === 'trash'
+          ? 'Go back to your notes to start writing.'
+          : 'Pick a note from the list, or create a new one to get started.'
+      }
+      actionLabel="New note"
+      onAction={() => void handleNewNote()}
+    />
+  );
 
   return (
-    <div className="min-h-screen bg-[#120F2A] text-[#F4F1FF] flex">
-      {/* Sidebar */}
-      <aside className="w-64 shrink-0 border-r border-white/10 p-4 flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-lg">Notes</span>
-          <span className="text-xs font-mono text-[#B3ACDB]">
-            {pendingCount > 0 ? `${pendingCount} pending` : 'saved locally'}
-          </span>
-        </div>
+    <>
+      <AppShell
+        sidebar={sidebar}
+        list={list}
+        editor={editor}
+        editorVisible={!!selectedNoteId && view === 'notes'}
+        sidebarOpen={sidebarOpen}
+        onCloseSidebar={closeSidebar}
+      />
 
-        <button
-          onClick={handleNewNote}
-          className="bg-[#FF5D73] text-[#2A0A0F] font-semibold rounded-lg py-2 text-sm hover:-translate-y-0.5 transition"
-        >
-          + New note
-        </button>
-
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono text-[#B3ACDB]">FOLDERS</span>
-            <button onClick={handleNewFolder} className="text-xs text-[#FFC857] hover:underline">
-              + add
-            </button>
-          </div>
-          <ul className="flex flex-col gap-1">
-            <li>
-              <button
-                onClick={() => setActiveFolder(undefined)}
-                className={`w-full text-left px-2 py-1.5 rounded text-sm ${
-                  activeFolder === undefined ? 'bg-[#261E5C] text-[#5EEAD4]' : 'text-[#B3ACDB] hover:bg-white/5'
-                }`}
-              >
-                All notes
-              </button>
-            </li>
-            {folders.map((f) => (
-              <li key={f.id} className="group flex items-center">
-                <button
-                  onClick={() => setActiveFolder(f.id)}
-                  className={`flex-1 text-left px-2 py-1.5 rounded text-sm ${
-                    activeFolder === f.id ? 'bg-[#261E5C] text-[#5EEAD4]' : 'text-[#B3ACDB] hover:bg-white/5'
-                  }`}
-                >
-                  {f.name}
-                </button>
-                <button
-                  onClick={() => softDeleteFolder(f.id)}
-                  className="opacity-0 group-hover:opacity-100 text-[#B3ACDB] hover:text-[#FF5D73] px-2"
-                  aria-label={`Delete ${f.name}`}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {tags.length > 0 && (
-          <div>
-            <span className="text-xs font-mono text-[#B3ACDB] block mb-2">TAGS</span>
-            <div className="flex flex-wrap gap-1.5">
-              {tags.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTag(activeTag === t ? null : t)}
-                  className={`text-xs font-mono px-2 py-1 rounded-full border ${
-                    activeTag === t
-                      ? 'bg-[#5EEAD4] text-[#0A2620] border-[#5EEAD4]'
-                      : 'border-white/10 text-[#B3ACDB] hover:border-[#5EEAD4]'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </aside>
-
-      {/* Notes list */}
-      <section className="w-80 shrink-0 border-r border-white/10 p-4 flex flex-col gap-3">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search notes..."
-          className="bg-[#261E5C] border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5EEAD4]"
+      {dialog?.kind === 'confirm-note' && (
+        <ConfirmDialog
+          title="Move note to trash?"
+          message={
+            <>
+              <strong className="text-ink">{dialog.note.title || 'Untitled note'}</strong> will be
+              moved to trash. You can restore it anytime from the Trash view.
+            </>
+          }
+          confirmLabel="Move to trash"
+          onConfirm={() => void confirmDeleteNote()}
+          onCancel={() => setDialog(null)}
         />
-        <div className="flex flex-col gap-2 overflow-y-auto">
-          {notes.length === 0 && (
-            <p className="text-sm text-[#B3ACDB] text-center py-8">No notes here yet.</p>
-          )}
-          {notes.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => setSelectedNoteId(n.id)}
-              className={`text-left rounded-lg p-3 border ${
-                selectedNoteId === n.id
-                  ? 'bg-[#261E5C] border-[#FF5D73]'
-                  : 'bg-[#1E1949] border-white/10 hover:border-white/20'
-              }`}
-            >
-              <div className="font-medium text-sm truncate">{n.title || 'Untitled note'}</div>
-              <div className="text-xs text-[#B3ACDB] truncate mt-1">{n.body || 'No content yet'}</div>
-            </button>
-          ))}
-        </div>
-      </section>
+      )}
 
-      {/* Editor */}
-      <main className="flex-1 p-6">
-        {!selectedNote ? (
-          <p className="text-[#B3ACDB] text-sm">Select a note, or create a new one.</p>
-        ) : (
-          <div className="max-w-2xl flex flex-col gap-3">
-            <input
-              value={selectedNote.title}
-              onChange={(e) => updateNote(selectedNote.id, { title: e.target.value })}
-              className="bg-transparent text-2xl font-semibold focus:outline-none"
-              placeholder="Untitled note"
-            />
-            <textarea
-              value={selectedNote.body}
-              onChange={(e) => updateNote(selectedNote.id, { body: e.target.value })}
-              className="bg-transparent text-sm text-[#B3ACDB] focus:outline-none min-h-[300px] resize-none"
-              placeholder="Start writing..."
-            />
-            <button
-              onClick={() => {
-                softDeleteNote(selectedNote.id);
-                setSelectedNoteId(null);
-              }}
-              className="self-start text-xs text-[#B3ACDB] hover:text-[#FF5D73]"
-            >
-              Delete note
-            </button>
-          </div>
-        )}
-      </main>
-    </div>
+      {dialog?.kind === 'confirm-folder' && (
+        <ConfirmDialog
+          title="Delete folder?"
+          message={
+            <>
+              <strong className="text-ink">{dialog.folder.name}</strong> will be deleted. Its notes
+              are moved to “All notes” and nothing else is lost.
+            </>
+          }
+          confirmLabel="Delete folder"
+          onConfirm={() => void confirmDeleteFolder()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === 'confirm-permanent' && (
+        <ConfirmDialog
+          title="Delete forever?"
+          message={
+            <>
+              <strong className="text-ink">{dialog.note.title || 'Untitled note'}</strong> will be
+              permanently removed. This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete forever"
+          onConfirm={() => void confirmDeleteForever()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === 'prompt-folder' && (
+        <PromptDialog
+          title="New folder"
+          placeholder="Folder name"
+          submitLabel="Create"
+          onSubmit={(name) => void submitFolderName(name)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {dialog?.kind === 'prompt-rename' && (
+        <PromptDialog
+          title="Rename folder"
+          label={dialog.folder.name}
+          initialValue={dialog.folder.name}
+          submitLabel="Rename"
+          onSubmit={(name) => void submitFolderName(name)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
+    </>
   );
 }

@@ -8,7 +8,7 @@
 
 const STORAGE_KEY = 'notes_local_user_id';
 
-export function getLocalUserId() {
+export function getLocalUserId(): string {
   let id = localStorage.getItem(STORAGE_KEY);
   if (!id) {
     id = crypto.randomUUID();
@@ -20,6 +20,6 @@ export function getLocalUserId() {
 // Call this once, right after a successful sign-up/sign-in, once you've
 // migrated the visitor's local data to their real Supabase user_id. It
 // stops treating the browser as an anonymous visitor going forward.
-export function clearLocalUserId() {
+export function clearLocalUserId(): void {
   localStorage.removeItem(STORAGE_KEY);
 }
