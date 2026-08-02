@@ -1,10 +1,9 @@
 # Offline Notes — local CRUD layer (Step 1 of the plan)
 
 This is Step 1 from the architecture plan: everything runs against
-IndexedDB only, no Supabase yet. It's tested and working — see
-`test-core.mjs` for the checks it passed (filtering, tags, search, soft
-delete, folder deletion un-filing its notes, and the sync queue quietly
-recording every change).
+IndexedDB only, no Supabase yet — filtering, tags, search, soft delete,
+folder deletion un-filing its notes, and a sync queue quietly recording
+every change.
 
 ## What's here
 
@@ -68,3 +67,26 @@ dev tools → Application → IndexedDB → `notesApp` to see the raw data.
 
 Each of those is a clean next step whenever you're ready for it — the
 foundation underneath won't need to change to support them.
+
+## Deploying to Render
+
+The app is 100% client-side (all data lives in your browser's IndexedDB),
+so it deploys as a **static site** — free tier, global CDN, no server.
+
+1. Push this repo to GitHub.
+2. In the [Render dashboard](https://dashboard.render.com/), click
+   **New + → Blueprint**, select the repo, and deploy. `render.yaml` in the
+   repo root already configures everything:
+   - build command `npm ci && npm run build`, publishing `dist/`
+   - SPA fallback rewrite (`/*` → `/index.html`) for future client routing
+   - immutable caching on hashed `/assets/*`, `no-cache` on `index.html`,
+     and basic security headers
+   - Node version pinned via `.node-version`
+3. That's it. Your URL will be `https://<service>.onrender.com`.
+
+Notes:
+- Each user's notes stay in their own browser — nothing is shared or stored
+  on the server. Enabling cross-device sync (plan step 4+) will add a real
+  backend service later; the static site stays as-is.
+- Env vars are baked in at build time for static sites; this app currently
+  needs none.
