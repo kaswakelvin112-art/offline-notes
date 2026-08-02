@@ -1,38 +1,12 @@
-# Render Blueprint — deploy as a static site (global CDN, free tier).
-# The app is fully client-side (IndexedDB), so there is no server process:
-# just build the Vite bundle and publish the `dist` folder.
-#
-# Deploy with:  New → Blueprint (render.yaml in the repo root),
-# or push this branch and use "New +" → Blueprint.
+
 
 services:
   - type: web
     name: offline-notes
-    runtime: static
+    runtime: node
+    plan: free
     buildCommand: npm ci && npm run build
-    staticPublishPath: dist
+    startCommand: npm start
+    healthCheckPath: /healthz
     previews:
       generation: automatic
-    routes:
-      # SPA fallback: serve index.html for paths that aren't real files.
-      # Real files (hashed /assets/*) are still served normally by the CDN.
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    headers:
-      # Hashed assets (Vite names them index-<hash>.js/css) are immutable:
-      # safe to cache forever, no cache-busting needed.
-      - path: /assets/*
-        name: Cache-Control
-        value: public, max-age=31536000, immutable
-      # The entry HTML must never be cached so new deploys go live immediately.
-      - path: /index.html
-        name: Cache-Control
-        value: no-cache
-      # Basic security headers.
-      - path: /*
-        name: X-Frame-Options
-        value: SAMEORIGIN
-      - path: /*
-        name: Referrer-Policy
-        value: strict-origin-when-cross-origin
