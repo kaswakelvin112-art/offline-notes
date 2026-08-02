@@ -70,23 +70,28 @@ foundation underneath won't need to change to support them.
 
 ## Deploying to Render
 
-The app is 100% client-side (all data lives in your browser's IndexedDB),
-so it deploys as a **static site** — free tier, global CDN, no server.
+The app's data lives entirely in your browser's IndexedDB, but it's deployed
+as a **web service** (Node) rather than a static site: a tiny Express server
+(`server.js`) serves the built Vite app, and the same process is where the
+API/sync endpoints will live when those land (plan step 4+) — no redeploy
+restructuring needed later.
 
 1. Push this repo to GitHub.
 2. In the [Render dashboard](https://dashboard.render.com/), click
    **New + → Blueprint**, select the repo, and deploy. `render.yaml` in the
    repo root already configures everything:
-   - build command `npm ci && npm run build`, publishing `dist/`
-   - SPA fallback rewrite (`/*` → `/index.html`) for future client routing
-   - immutable caching on hashed `/assets/*`, `no-cache` on `index.html`,
-     and basic security headers
+   - build command `npm ci && npm run build`
+   - start command `npm start` (runs `server.js` on the injected `PORT`)
+   - health check at `/healthz`
+   - immutable caching on hashed `/assets/*`, `no-cache` on HTML, SPA
+     fallback so client routes load `index.html`
    - Node version pinned via `.node-version`
 3. That's it. Your URL will be `https://<service>.onrender.com`.
 
 Notes:
 - Each user's notes stay in their own browser — nothing is shared or stored
-  on the server. Enabling cross-device sync (plan step 4+) will add a real
-  backend service later; the static site stays as-is.
-- Env vars are baked in at build time for static sites; this app currently
-  needs none.
+  on the server yet. When cross-device sync arrives (plan step 4+), you add
+  API routes to `server.js` and a database service, and the frontend keeps
+  talking to the same origin.
+- Try it locally in production mode with
+  `npm run build && npm start`, then open `http://localhost:3000`.
