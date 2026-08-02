@@ -1,9 +1,3 @@
-# Render Blueprint — deploy as a static site (global CDN, free tier).
-# The app is fully client-side (IndexedDB), so there is no server process:
-# just build the Vite bundle and publish the `dist` folder.
-#
-# Deploy with:  New → Blueprint (render.yaml in the repo root),
-# or push this branch and use "New +" → Blueprint.
 
 services:
   - type: web
